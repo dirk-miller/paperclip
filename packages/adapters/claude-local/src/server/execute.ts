@@ -359,6 +359,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const billingType = resolveClaudeBillingType(effectiveEnv);
   const skillsDir = await buildSkillsDir(config);
 
+  // Check for workspace-local skills directory (agent-specific skills)
+  // Skills must be in <workspace>/.claude/skills/ for Claude Code to discover them
+  const workspaceClaudeSkillsDir = path.join(cwd, ".claude", "skills");
+  let hasWorkspaceSkills = false;
+  try {
+    const stat = await fs.stat(workspaceClaudeSkillsDir);
+    hasWorkspaceSkills = stat.isDirectory();
+  } catch {
+    // Directory doesn't exist, that's fine
+  }
+
   // When instructionsFilePath is configured, create a combined temp file that
   // includes both the file content and the path directive, so we only need
   // --append-system-prompt-file (Claude CLI forbids using both flags together).
@@ -434,6 +445,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       args.push("--append-system-prompt-file", effectiveInstructionsFilePath);
     }
     args.push("--add-dir", skillsDir);
+    if (hasWorkspaceSkills) {
+      // Add workspace root so Claude Code finds <cwd>/.claude/skills/
+      args.push("--add-dir", cwd);
+    }
     if (extraArgs.length > 0) args.push(...extraArgs);
     return args;
   };
