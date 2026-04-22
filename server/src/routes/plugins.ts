@@ -518,7 +518,16 @@ export function pluginRoutes(
    * - 502 if the plugin worker is unavailable or the RPC call fails
    */
   router.post("/plugins/tools/execute", async (req, res) => {
-    assertBoard(req);
+    // AGENT_PLUGIN_ACCESS_PATCH_V1
+    // Original assertBoard(req) blocked all agent keys — only board users could invoke plugins.
+    // Agents are a valid caller: they need to reach their own plugin tools (e.g. cos_* tools
+    // in the Chief of Staff plugin). Company scoping is handled by assertCompanyAccess(req,
+    // resolvedRunContext.companyId) below — agents are restricted to their own company.
+    // Board users are still allowed through unchanged.
+    if (req.actor.type === "none") {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
 
     if (!toolDeps) {
       res.status(501).json({ error: "Plugin tool dispatch is not enabled" });
@@ -539,19 +548,45 @@ export function pluginRoutes(
       return;
     }
 
-    if (!runContext || typeof runContext !== "object") {
-      res.status(400).json({ error: '"runContext" is required and must be an object' });
+    // PLUGIN_RUNCONTEXT_AUTOINJECT_V1
+    // runContext fields are auto-injected from the authenticated actor where possible.
+    // Callers only need to supply `tool` and `parameters`. Full runContext is still
+    // accepted for backwards compatibility and for board-initiated calls that supply
+    // explicit context.
+    //
+    // - agentId:   injected from req.actor.agentId (agent keys); optional for board callers
+    // - companyId: injected from req.actor.companyId; caller-supplied value is validated
+    //              against the token to prevent cross-company calls
+    // - runId:     synthetic UUID generated if not supplied (used for logging only)
+    // - projectId: accepted but not validated or required; no downstream usage
+    const rc = (typeof runContext === "object" && runContext !== null) ? runContext : {};
+
+    const resolvedAgentId: string =
+      rc.agentId ??
+      (req.actor.type === "agent" ? (req.actor.agentId ?? "") : "");
+
+    const resolvedCompanyId: string =
+      rc.companyId ??
+      (req.actor.type === "agent" ? req.actor.companyId :
+       req.actor.type === "board" ? (req.actor.companyIds?.[0] ?? "") : "");
+
+    const resolvedRunId: string = rc.runId ?? randomUUID();
+    const resolvedProjectId: string = rc.projectId ?? "";
+
+    // If caller supplied companyId, verify it matches the token to prevent spoofing
+    if (rc.companyId && req.actor.type === "agent" && rc.companyId !== req.actor.companyId) {
+      res.status(403).json({ error: "runContext.companyId does not match authenticated company" });
       return;
     }
 
-    if (!runContext.agentId || !runContext.runId || !runContext.companyId || !runContext.projectId) {
-      res.status(400).json({
-        error: '"runContext" must include agentId, runId, companyId, and projectId',
-      });
-      return;
-    }
+    const resolvedRunContext = {
+      agentId: resolvedAgentId,
+      runId: resolvedRunId,
+      companyId: resolvedCompanyId,
+      projectId: resolvedProjectId,
+    };
 
-    assertCompanyAccess(req, runContext.companyId);
+    assertCompanyAccess(req, resolvedRunContext.companyId);
 
     // Verify the tool exists
     const registeredTool = toolDeps.toolDispatcher.getTool(tool);
@@ -564,7 +599,7 @@ export function pluginRoutes(
       const result = await toolDeps.toolDispatcher.executeTool(
         tool,
         parameters ?? {},
-        runContext,
+        resolvedRunContext,
       );
       res.json(result);
     } catch (err) {
