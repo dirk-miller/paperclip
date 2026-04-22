@@ -35,5 +35,19 @@ export function resolveServerDevWatchIgnorePaths(serverRoot: string): string[] {
     addIgnorePath(ignorePaths, path.resolve(serverRoot, relativePath));
   }
 
+  // iCloud Drive sync creates metadata files that trigger false-positive
+  // restarts when the server source tree lives under an iCloud-synced path.
+  // (f7621e7a adapted — moved from tsx --ignore flags to this resolver)
+  for (const pattern of [
+    "**/.DS_Store",
+    "**/*.icloud",
+    "**/._*",
+    "**/.Spotlight-*",
+    "**/.Trashes",
+    "**/node_modules/**/dist/**",
+  ]) {
+    ignorePaths.add(pattern);
+  }
+
   return [...ignorePaths];
 }
