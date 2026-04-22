@@ -3428,7 +3428,7 @@ export function heartbeatService(db: Db) {
       agent,
       context,
       previousSessionParams,
-      { useProjectWorkspace: requestedExecutionWorkspaceMode !== "agent_default" },
+      { useProjectWorkspace: false },
     );
     const issueRef = issueContext
       ? {
