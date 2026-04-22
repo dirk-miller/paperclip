@@ -340,6 +340,7 @@ interface WorktreeProvisionResult {
   isEphemeral: boolean;
   taskId: string | null;
   lockPath: string;
+  ghPat: string;
 }
 
 function parseWorktreeConfig(config: Record<string, unknown>): WorktreeConfig | null {
@@ -435,6 +436,7 @@ async function provisionWorktrees(
   taskId: string | null,
   runtimeSessionParams: Record<string, unknown>,
   onLog: (stream: "stdout" | "stderr", chunk: string) => Promise<void>,
+  ghPat: string,
 ): Promise<WorktreeProvisionResult | null> {
   const priorKey = typeof runtimeSessionParams.worktreeKey === "string" && runtimeSessionParams.worktreeKey.trim().length > 0
     ? runtimeSessionParams.worktreeKey.trim() : "";
@@ -513,6 +515,9 @@ async function provisionWorktrees(
     PAPERCLIP_PRIMARY_REPO: wkCfg.primaryRepo,
     PAPERCLIP_SECONDARY_REPO: wkCfg.secondaryRepo || "",
   };
+  if (ghPat) {
+    envAdditions.GH_TOKEN = ghPat;
+  }
 
   await onLog("stdout", `[paperclip-worktree] Provisioned branch="${branch}" primary=${primaryPath}${secondary ? ` secondary=${secondary.worktreePath}` : ""} cwd=${sessionCwd}\n`);
   return {
@@ -525,6 +530,7 @@ async function provisionWorktrees(
     isEphemeral,
     taskId,
     lockPath,
+    ghPat,
   };
 }
 
@@ -574,6 +580,7 @@ async function finalizeWorktree(
   wkCfg: WorktreeConfig,
   opts: { cleanup: boolean; removeClaudeSessionDir: boolean; taskId: string | null },
   onLog: (stream: "stdout" | "stderr", chunk: string) => Promise<void>,
+  ghPat: string,
 ): Promise<void> {
   try {
     // WORKTREE_PATCH_V3: fail-loud on uncommitted work
@@ -626,6 +633,7 @@ async function finalizeWorktree(
           await onLog("stderr", `[paperclip-worktree] Could not parse owner/repo from remote "${remote.stdout}"; skipping PR creation.\n`);
         } else {
           const ghEnv: NodeJS.ProcessEnv = { ...process.env };
+          if (ghPat) ghEnv.GH_TOKEN = ghPat;
           const existingRes = spawnSync("gh", ["pr", "list", "--repo", `${ownerRepo.owner}/${ownerRepo.repo}`, "--head", wkt.branch, "--state", "open", "--json", "number", "--limit", "1"], { encoding: "utf-8", cwd: wkt.worktreePath, env: ghEnv });
           let existingPrNumber: number | null = null;
           if (existingRes.status === 0 && existingRes.stdout) {
@@ -696,6 +704,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const dangerouslySkipPermissions = asBoolean(config.dangerouslySkipPermissions, true);
   const instructionsFilePath = asString(config.instructionsFilePath, "").trim();
   const instructionsFileDir = instructionsFilePath ? `${path.dirname(instructionsFilePath)}/` : "";
+
+  // Read GitHub PAT from macOS keychain if keychainService is configured
+  const keychainService = asString(config.keychainService, "").trim();
+  let ghPat = "";
+  if (keychainService) {
+    const keychainResult = spawnSync("security", ["find-generic-password", "-s", keychainService, "-w"], { encoding: "utf-8" });
+    if (keychainResult.status === 0 && keychainResult.stdout) {
+      ghPat = keychainResult.stdout.trim();
+    }
+  }
+
   const runtimeConfig = await buildClaudeRuntimeConfig({
     runId,
     agent,
@@ -726,7 +745,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         (typeof context.taskId === "string" && context.taskId.trim()) ||
         (typeof context.issueId === "string" && context.issueId.trim()) ||
         null;
-      worktreeResult = await provisionWorktrees(wkCfg, taskId, parseObject(runtime.sessionParams), onLog);
+      worktreeResult = await provisionWorktrees(wkCfg, taskId, parseObject(runtime.sessionParams), onLog, ghPat);
       if (worktreeResult) {
         cwd = worktreeResult.sessionCwd;
         for (const [k, v] of Object.entries(worktreeResult.envAdditions)) env[k] = v;
@@ -1078,9 +1097,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         }
       }
       try {
-        await finalizeWorktree(worktreeResult.primary, worktreeResult.config, { cleanup, removeClaudeSessionDir: cleanup, taskId: worktreeResult.taskId }, onLog);
+        await finalizeWorktree(worktreeResult.primary, worktreeResult.config, { cleanup, removeClaudeSessionDir: cleanup, taskId: worktreeResult.taskId }, onLog, worktreeResult.ghPat);
         if (worktreeResult.secondary) {
-          await finalizeWorktree(worktreeResult.secondary, worktreeResult.config, { cleanup, removeClaudeSessionDir: false, taskId: worktreeResult.taskId }, onLog);
+          await finalizeWorktree(worktreeResult.secondary, worktreeResult.config, { cleanup, removeClaudeSessionDir: false, taskId: worktreeResult.taskId }, onLog, worktreeResult.ghPat);
         }
       } catch (err) {
         await onLog("stderr", `[paperclip-worktree] Post-completion error (non-fatal): ${err instanceof Error ? err.message : String(err)}\n`);
