@@ -429,7 +429,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     resumeSessionId: string | null,
     attemptInstructionsFilePath: string | undefined,
   ) => {
-    const args = ["--print", "-", "--output-format", "stream-json", "--verbose"];
+    const args = ["--print", "-", "--output-format", "stream-json", "--verbose", "--setting-sources", "user,project,local"];
     if (resumeSessionId) args.push("--resume", resumeSessionId);
     if (dangerouslySkipPermissions) args.push("--dangerously-skip-permissions");
     if (chrome) args.push("--chrome");
@@ -448,6 +448,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       args.push("--append-system-prompt-file", attemptInstructionsFilePath);
     }
     args.push("--add-dir", promptBundle.addDir);
+    // If the workspace has a local .claude/skills/ directory, expose it as a
+    // second --add-dir so workspace-scoped skills load automatically without
+    // requiring vault-level registration. (fcc9c25f)
+    const localSkillsDir = path.join(cwd, ".claude", "skills");
+    try {
+      await fs.access(localSkillsDir);
+      args.push("--add-dir", localSkillsDir);
+    } catch {
+      // directory absent — skip
+    }
     if (extraArgs.length > 0) args.push(...extraArgs);
     return args;
   };
