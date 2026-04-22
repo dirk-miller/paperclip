@@ -200,9 +200,65 @@ const piLocalAdapter: ServerAdapterModule = {
   agentConfigurationDoc: piAgentConfigurationDoc,
 };
 
+// HERMES_WAKE_CONTEXT_PATCH_V1
+//
+// The hermes-paperclip-adapter reads wake context from ctx.config (the resolved
+// adapter config) rather than ctx.context (the contextSnapshot). All first-party
+// Paperclip adapters instead read taskId/wakeReason/commentId from ctx.context
+// and inject them as PAPERCLIP_* env vars. The hermes adapter never receives
+// those env vars, so agents that rely on them (e.g. CEO) see no wake context.
+//
+// This wrapper mirrors the env-var injection from claude-local/src/server/execute.ts
+// lines 140-183: it reads from ctx.context and injects PAPERCLIP_TASK_ID,
+// PAPERCLIP_WAKE_REASON, PAPERCLIP_WAKE_COMMENT_ID, PAPERCLIP_APPROVAL_ID,
+// PAPERCLIP_APPROVAL_STATUS into ctx.agent.adapterConfig.env as plain strings.
+// The hermes adapter does `Object.assign(env, userEnv)` with that field, so
+// the injected values land in the subprocess environment correctly.
+//
+// Remove when hermes-paperclip-adapter implements renderPaperclipWakePrompt
+// and reads wake context from ctx.context natively.
+function hermesExecuteWithWakeContext(
+  ctx: Parameters<typeof hermesExecute>[0],
+): ReturnType<typeof hermesExecute> {
+  const context = (ctx.context ?? {}) as Record<string, unknown>;
+
+  const str = (v: unknown): string | null => {
+    const s = typeof v === "string" ? v.trim() : "";
+    return s.length > 0 ? s : null;
+  };
+
+  const wakeTaskId = str(context.taskId) ?? str(context.issueId);
+  const wakeReason = str(context.wakeReason);
+  const wakeCommentId = str(context.wakeCommentId) ?? str(context.commentId);
+  const approvalId = str(context.approvalId);
+  const approvalStatus = str(context.approvalStatus);
+
+  const wakeEnv: Record<string, string> = {};
+  if (wakeTaskId) wakeEnv.PAPERCLIP_TASK_ID = wakeTaskId;
+  if (wakeReason) wakeEnv.PAPERCLIP_WAKE_REASON = wakeReason;
+  if (wakeCommentId) wakeEnv.PAPERCLIP_WAKE_COMMENT_ID = wakeCommentId;
+  if (approvalId) wakeEnv.PAPERCLIP_APPROVAL_ID = approvalId;
+  if (approvalStatus) wakeEnv.PAPERCLIP_APPROVAL_STATUS = approvalStatus;
+
+  const adapterCfg = (ctx.agent?.adapterConfig ?? {}) as Record<string, unknown>;
+  const existingEnv = (adapterCfg["env"] ?? {}) as Record<string, string>;
+  const fixedCtx = {
+    ...ctx,
+    agent: {
+      ...ctx.agent,
+      adapterConfig: {
+        ...(ctx.agent?.adapterConfig ?? {}),
+        env: { ...existingEnv, ...wakeEnv },
+      },
+    },
+  } as Parameters<typeof hermesExecute>[0];
+
+  return hermesExecute(fixedCtx);
+}
+
 const hermesLocalAdapter: ServerAdapterModule = {
   type: "hermes_local",
-  execute: hermesExecute,
+  execute: hermesExecuteWithWakeContext,
   testEnvironment: hermesTestEnvironment,
   sessionCodec: hermesSessionCodec,
   listSkills: hermesListSkills,
