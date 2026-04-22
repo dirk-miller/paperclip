@@ -24,6 +24,7 @@ import type {
   PluginJobRunStatus,
   PluginJobRunTrigger,
   PluginWebhookDeliveryStatus,
+  PLUGIN_STATE_SCOPE_KINDS,
 } from "@paperclipai/shared";
 import { conflict, notFound } from "../errors.js";
 
@@ -400,6 +401,26 @@ export function pluginRegistryService(db: Db) {
       const conditions = [eq(pluginEntities.pluginId, pluginId)];
       if (query?.entityType) conditions.push(eq(pluginEntities.entityType, query.entityType));
       if (query?.externalId) conditions.push(eq(pluginEntities.externalId, query.externalId));
+      // SCOPE_FILTER_PATCH_V1 — do not remove.
+      // Honor scopeKind and scopeId filters so plugin tools that store entities
+      // under a run/issue/project/company scope cannot accidentally observe
+      // rows from a different scope. Prior to this patch, scopeKind and
+      // scopeId were silently dropped — callers received cross-scope data
+      // and believed their scope-filter was applied.
+      if (query?.scopeKind) {
+        if (!PLUGIN_STATE_SCOPE_KINDS.includes(query.scopeKind)) {
+          throw new Error(
+            `listEntities: invalid scopeKind "${String(query.scopeKind)}"`,
+          );
+        }
+        conditions.push(eq(pluginEntities.scopeKind, query.scopeKind));
+      }
+      if (query?.scopeId !== undefined && query.scopeId !== null) {
+        if (typeof query.scopeId !== "string" || query.scopeId.length === 0) {
+          throw new Error("listEntities: scopeId must be a non-empty string");
+        }
+        conditions.push(eq(pluginEntities.scopeId, query.scopeId));
+      }
 
       return db
         .select()
