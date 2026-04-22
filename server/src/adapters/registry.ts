@@ -200,9 +200,33 @@ const piLocalAdapter: ServerAdapterModule = {
   agentConfigurationDoc: piAgentConfigurationDoc,
 };
 
+// HERMES_ENV_RESOLVE_PATCH_V1: hermes-paperclip-adapter@0.3.0 reads ctx.agent.adapterConfig.env
+// (raw DB record with {type:"plain",value:"..."} structured objects) instead of ctx.config.env
+// (the resolved plain-string env that Paperclip already computed via resolveAdapterConfigForRuntime).
+// Fix: before dispatching, replace agent.adapterConfig.env with the resolved strings from ctx.config.env.
+async function hermesExecuteWithEnvResolution(
+  ctx: Parameters<typeof hermesExecute>[0],
+): ReturnType<typeof hermesExecute> {
+  const resolvedEnv =
+    typeof ctx.config?.env === "object" && ctx.config.env !== null
+      ? (ctx.config.env as Record<string, string>)
+      : {};
+  const fixedCtx = {
+    ...ctx,
+    agent: {
+      ...ctx.agent,
+      adapterConfig: {
+        ...(ctx.agent?.adapterConfig ?? {}),
+        env: resolvedEnv,
+      },
+    },
+  };
+  return hermesExecute(fixedCtx);
+}
+
 const hermesLocalAdapter: ServerAdapterModule = {
   type: "hermes_local",
-  execute: hermesExecute,
+  execute: hermesExecuteWithEnvResolution,
   testEnvironment: hermesTestEnvironment,
   sessionCodec: hermesSessionCodec,
   listSkills: hermesListSkills,
