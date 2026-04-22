@@ -10,7 +10,7 @@ import {
 } from "@paperclipai/shared";
 import { trackRoutineCreated } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
-import { accessService, logActivity, routineService } from "../services/index.js";
+import { accessService, agentService, logActivity, routineService } from "../services/index.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { forbidden, unauthorized } from "../errors.js";
 import { getTelemetryClient } from "../telemetry.js";
@@ -19,6 +19,18 @@ export function routineRoutes(db: Db) {
   const router = Router();
   const svc = routineService(db);
   const access = accessService(db);
+  const agents = agentService(db);
+
+  /** Returns true if the acting agent has elevated routine management rights
+   * (CEO role or canCreateAgents permission). These agents may create and
+   * manage routines assigned to any agent, mirroring the trust model used
+   * throughout the issues and agents routes.
+   */
+  async function actorAgentHasElevatedAccess(agentId: string, companyId: string): Promise<boolean> {
+    const agent = await agents.getById(agentId);
+    if (!agent || agent.companyId !== companyId) return false;
+    return agent.role === "ceo" || Boolean((agent.permissions as Record<string, unknown>)?.canCreateAgents);
+  }
 
   async function assertBoardCanAssignTasks(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
@@ -30,12 +42,16 @@ export function routineRoutes(db: Db) {
     }
   }
 
-  function assertCanManageCompanyRoutine(req: Request, companyId: string, assigneeAgentId?: string | null) {
+  async function assertCanManageCompanyRoutine(req: Request, companyId: string, assigneeAgentId?: string | null) {
     assertCompanyAccess(req, companyId);
     if (req.actor.type === "board") return;
     if (req.actor.type !== "agent" || !req.actor.agentId) throw unauthorized();
     if (assigneeAgentId !== req.actor.agentId) {
-      throw forbidden("Agents can only manage routines assigned to themselves");
+      // Allow elevated agents (CEO role or canCreateAgents) to manage routines for any agent
+      const elevated = await actorAgentHasElevatedAccess(req.actor.agentId, companyId);
+      if (!elevated) {
+        throw forbidden("Agents can only manage routines assigned to themselves");
+      }
     }
   }
 
@@ -46,7 +62,11 @@ export function routineRoutes(db: Db) {
     if (req.actor.type === "board") return routine;
     if (req.actor.type !== "agent" || !req.actor.agentId) throw unauthorized();
     if (routine.assigneeAgentId !== req.actor.agentId) {
-      throw forbidden("Agents can only manage routines assigned to themselves");
+      // Allow elevated agents (CEO role or canCreateAgents) to manage any routine
+      const elevated = await actorAgentHasElevatedAccess(req.actor.agentId, routine.companyId);
+      if (!elevated) {
+        throw forbidden("Agents can only manage routines assigned to themselves");
+      }
     }
     return routine;
   }
@@ -61,7 +81,7 @@ export function routineRoutes(db: Db) {
   router.post("/companies/:companyId/routines", validate(createRoutineSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertBoardCanAssignTasks(req, companyId);
-    assertCanManageCompanyRoutine(req, companyId, req.body.assigneeAgentId);
+    await assertCanManageCompanyRoutine(req, companyId, req.body.assigneeAgentId);
     const created = await svc.create(companyId, req.body, {
       agentId: req.actor.type === "agent" ? req.actor.agentId : null,
       userId: req.actor.type === "board" ? req.actor.userId ?? "board" : null,
@@ -119,7 +139,10 @@ export function routineRoutes(db: Db) {
       req.body.assigneeAgentId !== undefined &&
       req.body.assigneeAgentId !== req.actor.agentId
     ) {
-      throw forbidden("Agents can only assign routines to themselves");
+      const elevated = await actorAgentHasElevatedAccess(req.actor.agentId!, routine.companyId);
+      if (!elevated) {
+        throw forbidden("Agents can only assign routines to themselves");
+      }
     }
     const updated = await svc.update(routine.id, req.body, {
       agentId: req.actor.type === "agent" ? req.actor.agentId : null,
