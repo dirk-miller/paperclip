@@ -76,10 +76,10 @@ if (process.env.npm_config_authenticated_private === "true") {
 
 const env = {
   ...process.env,
-  PAPERCLIP_UI_DEV_MIDDLEWARE: "true",
 };
 
 if (mode === "dev") {
+  env.PAPERCLIP_UI_DEV_MIDDLEWARE = "true";
   env.PAPERCLIP_DEV_SERVER_STATUS_FILE = devServerStatusFilePath;
 }
 
