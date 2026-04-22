@@ -68,6 +68,12 @@ Post-rebase: verify every row in the tables below is still present. Patches mark
 | 222b0dd0 | feat(claude-local): add MiniMax M2.7 models + provider routing | packages/adapters/claude-local/src/index.ts, src/server/execute.ts | `PROVIDER_ENDPOINTS`, `isThirdPartyModel()`, `resolveProviderLabel()` for non-Anthropic model routing; injects `ANTHROPIC_BASE_URL` + API key overrides for MiniMax | HIGH | Candidate for upstream PR (generalized) |
 | 6e0d29cf | feat(claude-local): per-agent worktree provisioning + PR on session exit (WORKTREE_PATCH_V1-V3) | packages/adapters/claude-local/src/server/execute.ts | When `adapterConfig.worktreeEnabled: true`: (a) provisions `~/.paperclip-worktrees/<slug>-<taskId>/` branched from `origin/<primaryBase>`, (b) overrides cwd to `<wkt>/_workspaces/<slug>/`, (c) injects GH_TOKEN/git identity env, PAPERCLIP_WORKTREE/PAPERCLIP_IOS_WORKTREE/PAPERCLIP_AGENT_SLUG, (d) on exit pushes branch + opens PR with `auto-merge:approved` label if commits exist (detects existing PR before creating), (e) always cleans up. Stable worktree per (agent, task) for session-resume. `.paperclip-wake.lock` prevents concurrent wakes. Supports optional `secondaryRepo` for engineering agents | HIGH | Not upstreamable (FreeMyMemories-specific policy) |
 
+### Agent Adapters (Hermes)
+
+| Commit | Subject | Files | Purpose | Reversion risk | Upstream outlook |
+|---|---|---|---|---|---|
+| 760610f9 | fix(hermes): inject PAPERCLIP_TASK_ID/WAKE_REASON/WAKE_COMMENT_ID from ctx.context (HERMES_WAKE_CONTEXT_PATCH_V1) | server/src/adapters/registry.ts | `hermes-paperclip-adapter` reads wake context from `ctx.config` (adapter config) not `ctx.context` (contextSnapshot). All first-party adapters read from `ctx.context` and inject `PAPERCLIP_TASK_ID`, `PAPERCLIP_WAKE_REASON`, `PAPERCLIP_WAKE_COMMENT_ID`, `PAPERCLIP_APPROVAL_ID` as env vars. Without this, hermes agents relying on those env vars (e.g. CEO heartbeat) see no wake context and exit immediately. Wrapper mirrors claude-local execute.ts lines 140–183. | HIGH | Candidate for upstream hermes-paperclip-adapter PR |
+
 ### Plugin & Orchestration
 
 | Commit | Subject | Files | Purpose | Reversion risk | Upstream outlook |
